@@ -1,9 +1,3 @@
-# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-# SPDX-License-Identifier: MIT-0
-
-# Authorizer code based on https://github.com/awslabs/aws-apigateway-lambda-authorizer-blueprints/blob/master/blueprints/python/api-gateway-authorizer-python.py
-# Token validation code based on https://github.com/awslabs/aws-support-tools/blob/master/Cognito/decode-verify-jwt/decode-verify-jwt.py
-
 import os
 import re
 import json
@@ -91,6 +85,7 @@ def lambda_handler(event, context):
 
     # Add user specific resources/methods
     policy.allow_method(HttpVerb.GET, f"/users/{principal_id}")
+    policy.allow_method(HttpVerb.GET, f"/users/count/{principal_id}")
     policy.allow_method(HttpVerb.PUT, f"/users/{principal_id}")
     policy.allow_method(HttpVerb.DELETE, f"/users/{principal_id}")
     policy.allow_method(HttpVerb.GET, f"/users/{principal_id}/*")
@@ -99,11 +94,9 @@ def lambda_handler(event, context):
 
     # Look for admin group in Cognito groups
     # Assumption: admin group always has higher precedence
-    if (
-        'cognito:groups' in validated_decoded_token
-        and validated_decoded_token['cognito:groups'][0] == admin_group_name
-    ):
+    if 'cognito:groups' in validated_decoded_token and validated_decoded_token['cognito:groups'][0] == admin_group_name:
         # add administrative privileges
+        policy.allow_method(HttpVerb.GET, "users/count")
         policy.allow_method(HttpVerb.GET, "users")
         policy.allow_method(HttpVerb.GET, "users/*")
         policy.allow_method(HttpVerb.DELETE, "users")
@@ -114,6 +107,7 @@ def lambda_handler(event, context):
     # Finally, build the policy
     auth_response = policy.build()
     return auth_response
+
 
 
 # *** Section 3 : authorization policy helper classes
@@ -172,44 +166,32 @@ class AuthPolicy(object):
         the internal list contains a resource ARN and a condition statement. The condition
         statement can be null."""
         if verb != "*" and not hasattr(HttpVerb, verb):
-            raise NameError(
-                "Invalid HTTP verb " + verb + ". Allowed verbs in HttpVerb class"
-            )
+            raise NameError("Invalid HTTP verb " + verb + ". Allowed verbs in HttpVerb class")
         resource_pattern = re.compile(self.pathRegex)
         if not resource_pattern.match(resource):
-            raise NameError(
-                "Invalid resource path: "
-                + resource
-                + ". Path should match "
-                + self.pathRegex
-            )
+            raise NameError("Invalid resource path: " + resource + ". Path should match " + self.pathRegex)
 
         if resource[:1] == "/":
             resource = resource[1:]
 
-        resource_arn = (
-            "arn:aws:execute-api:"
-            + self.region
-            + ":"
-            + self.awsAccountId
-            + ":"
-            + self.restApiId
-            + "/"
-            + self.stage
-            + "/"
-            + verb
-            + "/"
-            + resource
-        )
+        resource_arn = ("arn:aws:execute-api:" +
+                        self.region + ":" +
+                        self.awsAccountId + ":" +
+                        self.restApiId + "/" +
+                        self.stage + "/" +
+                        verb + "/" +
+                        resource)
 
         if effect.lower() == "allow":
-            self.allowMethods.append(
-                {'resourceArn': resource_arn, 'conditions': conditions}
-            )
+            self.allowMethods.append({
+                'resourceArn': resource_arn,
+                'conditions': conditions
+            })
         elif effect.lower() == "deny":
-            self.denyMethods.append(
-                {'resourceArn': resource_arn, 'conditions': conditions}
-            )
+            self.denyMethods.append({
+                'resourceArn': resource_arn,
+                'conditions': conditions
+            })
 
     def _get_empty_statement(self, effect):
         """Returns an empty statement object prepopulated with the correct action and the
@@ -217,7 +199,7 @@ class AuthPolicy(object):
         statement = {
             'Action': 'execute-api:Invoke',
             'Effect': effect[:1].upper() + effect[1:].lower(),
-            'Resource': [],
+            'Resource': []
         }
 
         return statement
@@ -264,15 +246,13 @@ class AuthPolicy(object):
     def allow_method_with_conditions(self, verb, resource, conditions):
         """Adds an API Gateway method (Http verb + Resource path) to the list of allowed
         methods and includes a condition for the policy statement. More on AWS policy
-        conditions here: http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Condition
-        """
+        conditions here: http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Condition"""
         self._add_method("Allow", verb, resource, conditions)
 
     def deny_method_with_conditions(self, verb, resource, conditions):
         """Adds an API Gateway method (Http verb + Resource path) to the list of denied
         methods and includes a condition for the policy statement. More on AWS policy
-        conditions here: http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Condition
-        """
+        conditions here: http://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html#Condition"""
         self._add_method("Deny", verb, resource, conditions)
 
     def build(self):
@@ -280,21 +260,19 @@ class AuthPolicy(object):
         conditions. This will generate a policy with two main statements for the effect:
         one statement for Allow and one statement for Deny.
         Methods that includes conditions will have their own statement in the policy."""
-        if (self.allowMethods is None or len(self.allowMethods) == 0) and (
-            self.denyMethods is None or len(self.denyMethods) == 0
-        ):
+        if ((self.allowMethods is None or len(self.allowMethods) == 0) and
+                (self.denyMethods is None or len(self.denyMethods) == 0)):
             raise NameError("No statements defined for the policy")
 
         policy = {
             'principalId': self.principalId,
-            'policyDocument': {'Version': self.version, 'Statement': []},
+            'policyDocument': {
+                'Version': self.version,
+                'Statement': []
+            }
         }
 
-        policy['policyDocument']['Statement'].extend(
-            self._get_statement_for_effect("Allow", self.allowMethods)
-        )
-        policy['policyDocument']['Statement'].extend(
-            self._get_statement_for_effect("Deny", self.denyMethods)
-        )
+        policy['policyDocument']['Statement'].extend(self._get_statement_for_effect("Allow", self.allowMethods))
+        policy['policyDocument']['Statement'].extend(self._get_statement_for_effect("Deny", self.denyMethods))
 
         return policy
